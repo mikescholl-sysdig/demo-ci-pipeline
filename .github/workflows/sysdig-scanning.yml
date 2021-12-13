@@ -1,0 +1,31 @@
+name: Sysdig Secure Inline Scanning
+on: [push]
+jobs:
+  Run-Sysdig-Inline-Scanner-v1:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build hello-world image
+        uses: docker/build-push-action@v2.7.0
+        with:
+          push: false
+          tags: hello-world:latest
+      - run: docker run --rm quay.io/sysdig/secure-inline-scan:2 hello-world:latest --sysdig-url https://us2.app.sysdig.com --sysdig-token $SYSDIG_API_TOKEN
+        env:
+          SYSDIG_API_TOKEN: ${{ secrets.SECURE_API_TOKEN }}  
+          
+  Run-Sysdig-Inline-Scanner-v2:
+    runs-on: ubuntu-latest
+    steps:
+      - run: wget "https://download.sysdig.com/scanning/inlinescan/inlinescan_$(curl -L -s https://download.sysdig.com/scanning/inlinescan/latest_version.txt)_linux_amd64" -O ./sysdig-inline-scanner
+      - run: chmod +x ./sysdig-inline-scanner
+      - name: Build hello-world image
+        uses: docker/build-push-action@v2.7.0
+        with:
+          push: false
+          tags: hello-world:latest
+      - run: ./sysdig-inline-scanner --apiurl https://us2.app.sysdig.com hello-world:latest
+        env:
+          SECURE_API_TOKEN: ${{ secrets.SECURE_API_TOKEN }}
+        
+          
+
