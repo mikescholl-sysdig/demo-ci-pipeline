@@ -23,7 +23,7 @@ jobs:
         with:
           push: false
           tags: hello-world:latest
-      - run: ./sysdig-inline-scanner --apiurl https://us2.app.sysdig.com hello-world:latest
+      - run: ./sysdig-inline-scanner --apiurl https://us2.app.sysdig.com hello-world:latest --full-vulns-table
         env:
           SECURE_API_TOKEN: ${{ secrets.SECURE_API_TOKEN }}
         
