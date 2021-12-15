@@ -9,10 +9,11 @@ jobs:
         with:
           push: false
           tags: hello-world:latest
-      - run: docker run --rm quay.io/sysdig/secure-inline-scan:2 hello-world:latest --sysdig-url https://us2.app.sysdig.com --sysdig-token $SYSDIG_API_TOKEN
+      - run: docker run --rm quay.io/sysdig/secure-inline-scan:2 -e SYSDIG_ADDED_BY=$SYSDIG_ADDED_BY hello-world:latest --sysdig-url https://us2.app.sysdig.com --sysdig-token $SYSDIG_API_TOKEN
         env:
           SYSDIG_API_TOKEN: ${{ secrets.SECURE_API_TOKEN }}  
-          
+          SYSDIG_ADDED_BY: "Github Actions"          
+
   Run-Sysdig-Inline-Scanner-v2:
     runs-on: ubuntu-latest
     steps:
