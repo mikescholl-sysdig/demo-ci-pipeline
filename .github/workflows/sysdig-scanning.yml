@@ -1,32 +1,82 @@
 name: Sysdig Secure Inline Scanning
-on: [push]
+on: [push, pull_request]
 jobs:
+  Build-Docker-Artifact:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
+
+      - name: Checkout Code
+        uses: actions/checkout@v2
+      
+      - name: Build hello-world image
+        uses: docker/build-push-action@v2
+        with:
+          push: false
+          tags: hello-world:latest
+          outputs: type=docker, dest=/tmp/hello-world.tar
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v2
+        with:
+          name: hello-world
+          path: /tmp/hello-world.tar
+          retention-days: 5
+
   Run-Sysdig-Inline-Scanner-v1:
     runs-on: ubuntu-latest
+    needs: [Build-Docker-Artifact]
     steps:
-      - name: Build hello-world image
-        uses: docker/build-push-action@v2.7.0
-        with:
-          push: false
-          tags: hello-world:latest
-      - run: docker run --rm quay.io/sysdig/secure-inline-scan:2 -e SYSDIG_ADDED_BY=$SYSDIG_ADDED_BY hello-world:latest --sysdig-url https://us2.app.sysdig.com --sysdig-token $SYSDIG_API_TOKEN
-        env:
-          SYSDIG_API_TOKEN: ${{ secrets.SECURE_API_TOKEN }}  
-          SYSDIG_ADDED_BY: "Github Actions"          
+      - name: Download Artifact
+        uses: actions/download-artifact@v2
+        with: 
+          name: hello-world
+          path: /tmp
 
-  Run-Sysdig-Inline-Scanner-v2:
-    runs-on: ubuntu-latest
-    steps:
-      - run: wget "https://download.sysdig.com/scanning/inlinescan/inlinescan_$(curl -L -s https://download.sysdig.com/scanning/inlinescan/latest_version.txt)_linux_amd64" -O ./sysdig-inline-scanner
-      - run: chmod +x ./sysdig-inline-scanner
-      - name: Build hello-world image
-        uses: docker/build-push-action@v2.7.0
-        with:
-          push: false
-          tags: hello-world:latest
-      - run: ./sysdig-inline-scanner --apiurl https://us2.app.sysdig.com hello-world:latest --full-vulns-table
+      - run: docker run --env SYSDIG_ADDED_BY='cicd-inline-scan' -v /tmp:/tmp --rm quay.io/sysdig/secure-inline-scan:2 hello-world:latest --sysdig-url https://us2.app.sysdig.com --sysdig-token $SECURE_API_TOKEN --storage-type docker-archive --storage-path /tmp/hello-world.tar --write-json /tmp/image-results.json
         env:
           SECURE_API_TOKEN: ${{ secrets.SECURE_API_TOKEN }}
+        continue-on-error: true
+
+      - name: Upload image results JSON
+        uses: actions/upload-artifact@v2
+        with:
+          name: image-scan-results
+          path: /tmp/image-results.json
+
+  Post-Sysdig-Inline-Scan-Results:
+    runs-on: ubuntu-latest
+    needs: [Run-Sysdig-Inline-Scanner-v1]
+    steps:
+      - name: Download Artifact
+        uses: actions/download-artifact@v2
+        with:
+          name: image-scan-results
+          path: /tmp
+          
+      - run: echo "pr_number=$(jq .pull_request.number $GITHUB_EVENT_PATH)" >> $GITHUB_ENV
+
+      - run: echo "${{ env.pr_number }}"
+
+      - run: jq .log /tmp/image-results.json
+
+      - run: jq .status /tmp/image-results.json
+        
+
+#  Run-Sysdig-Inline-Scanner-v2:
+#    runs-on: ubuntu-latest
+#    steps:
+#      - run: wget "https://download.sysdig.com/scanning/inlinescan/inlinescan_$(curl -L -s https://download.sysdig.com/scanning/inlinescan/latest_version.txt)_linux_amd64" -O ./sysdig-inline-scanner
+#      - run: chmod +x ./sysdig-inline-scanner
+#      - name: Build hello-world image
+#        uses: docker/build-push-action@v2.7.0
+#        with:
+#          push: false
+#          tags: ${{ secrets.IMAGE_REPOSITORY }}/hello-world:latest
+#      - run: ./sysdig-inline-scanner --apiurl https://us2.app.sysdig.com ${{ secrets.IMAGE_REPOSITORY }}/hello-world:latest --full-vulns-table
+#        env:
+#          SECURE_API_TOKEN: ${{ secrets.SECURE_API_TOKEN }}
         
           
 
