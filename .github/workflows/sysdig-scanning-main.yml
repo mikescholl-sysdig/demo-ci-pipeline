@@ -23,11 +23,11 @@ jobs:
         with:
           images: hello-world
           tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=semver,pattern={{ version }}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix={{ branch }}-
+            type=ref,event=branch,priority=100
+            type=ref,event=pr,priority=200
+            type=semver,pattern={{ version }},priority=900
+            type=semver,pattern={{major}}.{{minor}},priority=900
+            type=sha,prefix={{ branch }}-,priority=300
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v1
