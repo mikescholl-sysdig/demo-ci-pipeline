@@ -1,0 +1,10 @@
+{
+    "pull_request": {
+      "head": {
+        "ref": "refs/heads/target"
+      },
+      "base": {
+        "ref": "refs/heads/source"
+      }
+    }
+  }

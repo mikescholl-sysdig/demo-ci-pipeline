@@ -1,5 +1,8 @@
 name: Build and Scan Image with Sysdig Secure Inline Scanner v1
 on: 
+  create:
+    tags:
+      - 'v*'
   push:
     tags:
       - 'v*'
@@ -8,14 +11,22 @@ on:
   pull_request:
     branches:
       - main
+    types:
+      - opened
+      - synchronize
+      - review_requested
+      - reopened
+      - edited
 
 jobs:
   Build-Docker-Artifact:
+    outputs:
+      tags: ${{ steps.save.outputs.json }}
     runs-on: ubuntu-latest
     steps:
-
-      - name: Checkout Code
-        uses: actions/checkout@v2
+      - name: Define branch output
+        id: branch
+        run: echo "::set-output name=branch::$( echo ${{ github.ref }} | cut -d '/' -f 3 )"
 
       - name: Docker metadata tag set
         id: meta
@@ -23,17 +34,23 @@ jobs:
         with:
           images: hello-world
           tags: |
-            type=ref,event=branch,priority=100
-            type=ref,event=pr,priority=200
+            type=ref,event=branch,priority=300
+            type=raw,priority=100,enable=${{ github.event_name == 'pull_request' }},value=pr-${{ steps.branch.outputs.branch }}-{{sha}}
             type=semver,pattern={{ version }},priority=900
             type=semver,pattern={{major}}.{{minor}},priority=900
-            type=sha,prefix={{ branch }}-,priority=300
+            type=sha,prefix={{ branch }}-,priority=400,enable=${{ github.event_name == 'push' && steps.branch.outputs.branch == 'main' }}
+            type=ref,enable=${{ github.event_name == 'create' && startsWith(github.ref, 'refs/tags/v' ) }},event=tag,priority=100
+          labels: |
+            org.opencontainers.image.title=hello-world
 
       - name: Set up Docker Buildx
+        if: ${{ !env.ACT }}
         uses: docker/setup-buildx-action@v1
 
       - name: Build hello-world image
+        if: ${{ !env.ACT }}
         uses: docker/build-push-action@v2
+        id: build
         with:
           push: false
           tags: ${{ steps.meta.outputs.tags }}
@@ -41,74 +58,101 @@ jobs:
           outputs: type=docker, dest=${{ github.workspace }}/hello-world.tar
 
       - name: Upload Artifact
+        if: ${{ !env.ACT }}
         uses: actions/upload-artifact@v2
         with:
           name: hello-world
           path: ${{ github.workspace }}/hello-world.tar
           retention-days: 5
 
+#      - name: Parse image tags from metadata output
+#        run: echo "::set-output name=tags::${{ fromJSON(steps.meta.outputs.json).tags }}"
+#        id: json
+
+      - name: Store a matrix
+        id: save
+        uses: nickofthyme/object-remap@v1
+        with:
+          tags: '${{ toJSON(fromJSON(steps.meta.outputs.json).tags) }}'
+
+#      - name: output save
+#        run: jq -r '.' <<< ${{ toJSON(steps.save.outputs.json) }}
+#        id: json
   Run-Sysdig-Inline-Scanner-v1:
     runs-on: ubuntu-latest
     needs:
       - Build-Docker-Artifact
+    strategy:
+      matrix: ${{ fromJSON(needs.Build-Docker-Artifact.outputs.tags) }}
     steps:
       - name: Download Artifact
+        if: ${{ !env.ACT }}
         uses: actions/download-artifact@v2
         with: 
           name: hello-world
           path: ${{ github.workspace }}
 
-      - name: Add short_sha property with commit short sha
-        id: sha
-        run: echo "::set-output name=short_sha::$(echo ${{ github.sha }} | cut -c1-8)"
+ #     - name: Add short_sha property with commit short sha
+ #       id: sha
+ #       run: echo "::set-output name=short_sha::$(echo ${{ github.sha }} | cut -c1-8)"
 
       - name: Scan image with Sysdig Scanner
         uses: sysdiglabs/scan-action@v3
         id: scan
         with:
-          image-tag: hello-world:main-${{ steps.sha.outputs.short_sha }}
+          image-tag: ${{ matrix.tags }}
           sysdig-secure-url: ${{ secrets.SYSDIG_SECURE_URL }}
           sysdig-secure-token: ${{ secrets.SECURE_API_TOKEN }}
           input-type: docker-archive
           input-path: ${{ github.workspace }}/hello-world.tar
           ignore-failed-scan: true
-          extra-parameters: -c 
-          #--write-json ${{ github.workspace }}/hello-world-main-${{ steps.sha.outputs.short_sha }}.json
 
-      - run: mv ${{ github.workspace }}/report.json ${{ github.workspace }}/hello-world-main-${{ steps.sha.outputs.short_sha }}.json
-
+      #### Old scan not using the pre-built action
       #- run: docker run --env SYSDIG_ADDED_BY='cicd-inline-scan' -v /tmp:/tmp --rm quay.io/sysdig/secure-inline-scan:2 hello-world:main-${GITHUB_SHA::7} --sysdig-url https://us2.app.sysdig.com --sysdig-token $SECURE_API_TOKEN --storage-type docker-archive --storage-path /tmp/hello-world.tar --write-json /tmp/image-results.json -c --report-folder /tmp
       #  env:
       #    SECURE_API_TOKEN: ${{ secrets.SECURE_API_TOKEN }}
       #  continue-on-error: true
+
+      - name: Remove invalid characters from tag
+        run: |
+          safe=echo "${{ matrix.tags }}" | sed 's/:/-/g'
+          echo "::set-output name=safe-tag::$(echo $safe)"
+        id: tag
+
+      - name: Rename report for specific image tag
+        run: mv ${{ github.workspace }}/report.json ${{ github.workspace }}/${{ steps.safe.outputs.tag }}.json
       - name: Upload image results JSON
         uses: actions/upload-artifact@v2
         with:
-          name: image-scan-results-json
-          path: ${{ github.workspace }}/hello-world-main-${{ steps.sha.outputs.short_sha }}.json
+          name: ${{ steps.safe.outputs.tag }}-results
+          path: ${{ github.workspace }}/${{ steps.safe.outputs.tag }}.json
 
 
   Post-Sysdig-Inline-Scan-Results:
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'pull_request' }}
+    #if: ${{ github.event_name == 'pull_request' }}
     needs: 
+      - Build-Docker-Artifact
       - Run-Sysdig-Inline-Scanner-v1
+    strategy:
+      matrix: ${{ fromJSON(needs.Build-Docker-Artifact.outputs.tags) }}
     steps:
+      - name: Remove invalid characters from tag
+        run: |
+          safe=echo "${{ matrix.tags }}" | sed 's/:/-/g'
+          echo "::set-output name=safe-tag::$(echo $safe)"
+        id: tag
 
       - run: jq .issue ${{ github.event_path }}
 
       - name: Download Artifact
         uses: actions/download-artifact@v2
         with:
-          name: image-scan-results-json
+          name: ${{ steps.safe.outputs.tag }}-results
           path: ${{ github.workspace }}
 
-      - name: Add short_sha property with commit short sha
-        id: sha
-        run: echo "::set-output name=short_sha::$(echo ${{ github.sha }} | cut -c1-8)"
-
-      - run: jq .log ${{ github.workspace }}/hello-world-main-${{ steps.sha.outputs.short_sha }}.json
-      - run: jq .status ${{ github.workspace }}/hello-world-main-${{ steps.sha.outputs.short_sha }}.json
+      - run: jq .log ${{ github.workspace }}/${{ steps.safe.outputs.tag }}.json
+      - run: jq .status ${{ github.workspace }}/${{ steps.safe.outputs.tag }}.json
         
 
 #  Run-Sysdig-Inline-Scanner-v2:
