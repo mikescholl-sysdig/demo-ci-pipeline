@@ -187,13 +187,13 @@ jobs:
               body: ${{ steps.results.outputs.result }}
             })
 
-      - name: Determine status of scan and fail job if status is "fail"
+      - name: Determine status of scan.
         run: |
-          scan_result=$(jq .status ${{ github.workspace }}/${{ steps.tag.outputs.safe-tag }}.json)
-          if [ "$scan_result" = "fail" ] ; then
-            echo "Scan for ${{ matrix.tags }} has failed."
-            exit 1
-          fi
+          echo "::set-output name=status::$(jq .status ${{ github.workspace }}/${{ steps.tag.outputs.safe-tag }}.json)"
+        id: status
+      - name: Fail job if scan is failed
+        if: ${{ steps.status.outputs.status }} == "fail"
+        run: exit 1
       
 
 
