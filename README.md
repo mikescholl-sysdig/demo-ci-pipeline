@@ -5,3 +5,5 @@ A demo Github action pipeline doing a Sysdig Scan, parsing results and posting t
 
 ### Workflow Testing locally
 [Testing Workflows](./tests/workflow/TESTING_WORKFLOWS.md)
+
+### Creating test pull request
