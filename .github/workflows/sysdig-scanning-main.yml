@@ -122,11 +122,22 @@ jobs:
 
       - name: Rename report for specific image tag
         run: mv ${{ github.workspace }}/report.json ${{ github.workspace }}/${{ steps.tag.outputs.safe-tag }}.json
+      
       - name: Upload image results JSON
         uses: actions/upload-artifact@v2
         with:
           name: ${{ steps.tag.outputs.safe-tag }}-results
           path: ${{ github.workspace }}/${{ steps.tag.outputs.safe-tag }}.json
+
+      - name: Determine status of scan.
+        if: ${{ steps.status.outputs.status }} == "fail" && ${{ github.event_name == 'pull_request' }}
+        run: |
+          echo "::set-output name=status::$(jq .status ${{ github.workspace }}/${{ steps.tag.outputs.safe-tag }}.json)"
+        id: status
+        
+      - name: Fail job if scan is failed
+        if: ${{ steps.status.outputs.status }} == "fail" && ${{ github.event_name == 'pull_request' }}
+        run: exit 1
 
 
   Post-Sysdig-Inline-Scan-Results:
@@ -187,13 +198,14 @@ jobs:
               body: ${{ steps.results.outputs.result }}
             })
 
-      - name: Determine status of scan and fail job if status is "fail"
+      - name: Determine status of scan.
         run: |
-          scan_result=$(jq .status ${{ github.workspace }}/${{ steps.tag.outputs.safe-tag }}.json)
-          if [ "$scan_result" = "fail" ] ; then
-            echo "Scan for ${{ matrix.tags }} has failed."
-            exit 1
-          fi
+          echo "::set-output name=status::$(jq .status ${{ github.workspace }}/${{ steps.tag.outputs.safe-tag }}.json)"
+        id: status
+        
+      - name: Fail job if scan is failed
+        if: ${{ steps.status.outputs.status }} == "fail"
+        run: exit 1
       
 
 
