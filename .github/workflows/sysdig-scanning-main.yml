@@ -115,22 +115,23 @@ jobs:
 
       - name: Remove invalid characters from tag
         run: |
-          safe=echo "${{ matrix.tags }}" | sed 's/:/-/g'
+          safe=$(echo "${{ matrix.tags }}" | sed 's/:/-/g')
+          echo $safe
           echo "::set-output name=safe-tag::$(echo $safe)"
         id: tag
 
       - name: Rename report for specific image tag
-        run: mv ${{ github.workspace }}/report.json ${{ github.workspace }}/${{ steps.safe.outputs.tag }}.json
+        run: mv ${{ github.workspace }}/report.json ${{ github.workspace }}/${{ steps.tag.outputs.safe-tag }}.json
       - name: Upload image results JSON
         uses: actions/upload-artifact@v2
         with:
-          name: ${{ steps.safe.outputs.tag }}-results
-          path: ${{ github.workspace }}/${{ steps.safe.outputs.tag }}.json
+          name: ${{ steps.tag.outputs.safe-tag }}-results
+          path: ${{ github.workspace }}/${{ steps.tag.outputs.safe-tag }}.json
 
 
   Post-Sysdig-Inline-Scan-Results:
     runs-on: ubuntu-latest
-    #if: ${{ github.event_name == 'pull_request' }}
+    if: ${{ github.event_name == 'pull_request' }}
     needs: 
       - Build-Docker-Artifact
       - Run-Sysdig-Inline-Scanner-v1
@@ -139,21 +140,62 @@ jobs:
     steps:
       - name: Remove invalid characters from tag
         run: |
-          safe=echo "${{ matrix.tags }}" | sed 's/:/-/g'
+          safe=$(echo "${{ matrix.tags }}" | sed 's/:/-/g')
           echo "::set-output name=safe-tag::$(echo $safe)"
         id: tag
 
-      - run: jq . ${{ github.event_path }}
+      - name: Obtain comments URI
+        run: echo "::set-output name=comments-uri::$(jq .pull_request.'_links'.comments.href ${{ github.event_path }})"
+        id: comments-uri
 
       - name: Download Artifact
         uses: actions/download-artifact@v2
         with:
-          name: ${{ steps.safe.outputs.tag }}-results
+          name: ${{ steps.tag.outputs.safe-tag }}-results
           path: ${{ github.workspace }}
 
-      - run: jq .log ${{ github.workspace }}/${{ steps.safe.outputs.tag }}.json
-      - run: jq .status ${{ github.workspace }}/${{ steps.safe.outputs.tag }}.json
-        
+      - run: ls -lah ${{ github.workspace }}
+
+      - name: Parse Scan Results
+        run: |
+          results=$(jq .log ${{ github.workspace }}/${{ steps.tag.outputs.safe-tag }}.json)
+          echo "::set-output name=result::$(echo $results)"
+        id: results
+
+     # - name: Post results to PR Comments
+     #   run: |
+     #     curl -H 'Authentication: token ${{ secrets.GITHUB_TOKEN }}' -X POST -d '{"body": ${{ steps.result.output.result }} }' ${{ steps.comments-uri.outputs.comments-uri }}
+
+
+      - run: echo '${{ steps.results.outputs.result }}'
+
+      - name: View context attributes
+        uses: actions/github-script@v5
+        with:
+          script: console.log(context)
+
+      - name: Post results to PR comments
+        uses: actions/github-script@v5
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          debug: true
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: ${{ steps.results.outputs.result }}
+            })
+
+      - name: Determine status of scan and fail job if status is "fail"
+        run: |
+          scan_result=$(jq .status ${{ github.workspace }}/${{ steps.tag.outputs.safe-tag }}.json)
+          if [ "$scan_result" = "fail" ] ; then
+            echo "Scan for ${{ matrix.tags }} has failed."
+            exit 1
+          fi
+      
+
 
 #  Run-Sysdig-Inline-Scanner-v2:
 #    runs-on: ubuntu-latest
