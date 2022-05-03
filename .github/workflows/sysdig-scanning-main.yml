@@ -18,21 +18,37 @@ on:
       - reopened
       - edited
 
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/sdc-ci-scan
+
 jobs:
   Build-Docker-Artifact:
     outputs:
       tags: ${{ steps.save.outputs.json }}
     runs-on: ubuntu-latest
     steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v2
+      
       - name: Define branch output
         id: branch
         run: echo "::set-output name=branch::$( echo ${{ github.ref }} | cut -d '/' -f 3 )"
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@f054a8b539a109f9f41c372932f1ae047eff08c9
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Docker metadata tag set
         id: meta
         uses: docker/metadata-action@v3
         with:
           images: hello-world
+          registry: ${{ env.REGISTRY }}
           tags: |
             type=ref,event=branch,priority=300
             type=raw,priority=100,enable=${{ github.event_name == 'pull_request' }},value=pr-${{ steps.branch.outputs.branch }}-{{sha}}
@@ -65,19 +81,12 @@ jobs:
           path: ${{ github.workspace }}/hello-world.tar
           retention-days: 5
 
-#      - name: Parse image tags from metadata output
-#        run: echo "::set-output name=tags::${{ fromJSON(steps.meta.outputs.json).tags }}"
-#        id: json
-
       - name: Store a matrix
         id: save
         uses: nickofthyme/object-remap@v1
         with:
           tags: '${{ toJSON(fromJSON(steps.meta.outputs.json).tags) }}'
 
-#      - name: output save
-#        run: jq -r '.' <<< ${{ toJSON(steps.save.outputs.json) }}
-#        id: json
   Run-Sysdig-Inline-Scanner-v1:
     runs-on: ubuntu-latest
     needs:
@@ -92,10 +101,6 @@ jobs:
           name: hello-world
           path: ${{ github.workspace }}
 
- #     - name: Add short_sha property with commit short sha
- #       id: sha
- #       run: echo "::set-output name=short_sha::$(echo ${{ github.sha }} | cut -c1-8)"
-
       - name: Scan image with Sysdig Scanner
         uses: sysdiglabs/scan-action@v3
         id: scan
@@ -106,12 +111,6 @@ jobs:
           input-type: docker-archive
           input-path: ${{ github.workspace }}/hello-world.tar
           ignore-failed-scan: true
-
-      #### Old scan not using the pre-built action
-      #- run: docker run --env SYSDIG_ADDED_BY='cicd-inline-scan' -v /tmp:/tmp --rm quay.io/sysdig/secure-inline-scan:2 hello-world:main-${GITHUB_SHA::7} --sysdig-url https://us2.app.sysdig.com --sysdig-token $SECURE_API_TOKEN --storage-type docker-archive --storage-path /tmp/hello-world.tar --write-json /tmp/image-results.json -c --report-folder /tmp
-      #  env:
-      #    SECURE_API_TOKEN: ${{ secrets.SECURE_API_TOKEN }}
-      #  continue-on-error: true
 
       - name: Remove invalid characters from tag
         run: |
@@ -135,8 +134,8 @@ jobs:
           echo "::set-output name=status::$(jq .status ${{ github.workspace }}/${{ steps.tag.outputs.safe-tag }}.json)"
         id: status
         
-      - name: Fail job if scan is failed
-        if: ${{ steps.status.outputs.status }} == "fail" && ${{ github.event_name == 'pull_request' }}
+      - name: Fail job if scan is failed and is not pull request.
+        if: ${{ steps.status.outputs.status }} == "fail" && ${{ github.event_name != 'pull_request' }}
         run: exit 1
 
 
@@ -173,13 +172,6 @@ jobs:
           echo "::set-output name=result::$(echo $results)"
         id: results
 
-     # - name: Post results to PR Comments
-     #   run: |
-     #     curl -H 'Authentication: token ${{ secrets.GITHUB_TOKEN }}' -X POST -d '{"body": ${{ steps.result.output.result }} }' ${{ steps.comments-uri.outputs.comments-uri }}
-
-
-      - run: echo '${{ steps.results.outputs.result }}'
-
       - name: View context attributes
         uses: actions/github-script@v5
         with:
@@ -206,22 +198,6 @@ jobs:
       - name: Fail job if scan is failed
         if: ${{ steps.status.outputs.status }} == "fail"
         run: exit 1
-      
-
-
-#  Run-Sysdig-Inline-Scanner-v2:
-#    runs-on: ubuntu-latest
-#    steps:
-#      - run: wget "https://download.sysdig.com/scanning/inlinescan/inlinescan_$(curl -L -s https://download.sysdig.com/scanning/inlinescan/latest_version.txt)_linux_amd64" -O ./sysdig-inline-scanner
-#      - run: chmod +x ./sysdig-inline-scanner
-#      - name: Build hello-world image
-#        uses: docker/build-push-action@v2.7.0
-#        with:
-#          push: false
-#          tags: ${{ secrets.IMAGE_REPOSITORY }}/hello-world:latest
-#      - run: ./sysdig-inline-scanner --apiurl https://us2.app.sysdig.com ${{ secrets.IMAGE_REPOSITORY }}/hello-world:latest --full-vulns-table
-#        env:
-#          SECURE_API_TOKEN: ${{ secrets.SECURE_API_TOKEN }}
         
           
 
