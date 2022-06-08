@@ -87,7 +87,7 @@ jobs:
         with:
           tags: '${{ toJSON(fromJSON(steps.meta.outputs.json).tags) }}'
 
-  Run-Sysdig-Inline-Scanner-v1:
+  Run-Sysdig-Inline-Scanner-v2:
     runs-on: ubuntu-latest
     needs:
       - Build-Docker-Artifact
@@ -101,103 +101,111 @@ jobs:
           name: hello-world
           path: ${{ github.workspace }}
 
-      - name: Scan image with Sysdig Scanner
-        uses: sysdiglabs/scan-action@v3
-        id: scan
-        with:
-          image-tag: ${{ matrix.tags }}
-          sysdig-secure-url: ${{ secrets.SYSDIG_SECURE_URL }}
-          sysdig-secure-token: ${{ secrets.SECURE_API_TOKEN }}
-          input-type: docker-archive
-          input-path: ${{ github.workspace }}/hello-world.tar
-          ignore-failed-scan: true
+      #- name: Scan image with Sysdig Scanner v1
+      #  uses: sysdiglabs/scan-action@v3
+      #  id: scan
+      #  with:
+      #    image-tag: ${{ matrix.tags }}
+      #    sysdig-secure-url: ${{ secrets.SYSDIG_SECURE_URL }}
+      #    sysdig-secure-token: ${{ secrets.SECURE_API_TOKEN }}
+      #    input-type: docker-archive
+      #    input-path: ${{ github.workspace }}/hello-world.tar
+      #    ignore-failed-scan: true
 
-      - name: Remove invalid characters from tag
+      - name: Scan image with Sysdig Scanner v2
         run: |
-          safe=$(echo "${{ matrix.tags }}" | sed 's/:/-/g')
-          echo $safe
-          echo "::set-output name=safe-tag::$(echo $safe)"
-        id: tag
+          docker load < hello-world.tar
+          export SECURE_API_TOKEN=${{ secrets.SECURE_API_TOKEN }}
+          VERSION=$(curl -L -s https://download.sysdig.com/scanning/sysdig-cli-scanner/latest_version.txt)
+          curl -LO "https://download.sysdig.com/scanning/bin/sysdig-cli-scanner/${VERSION}/linux/amd64/sysdig-cli-scanner"
+          chmod +x ./sysdig-cli-scanner
+          ./sysdig-cli-scanner --apiurl ${{ secrets.SYSDIG_SECURE_URL }} docker://${{ matrix.tags }}
 
-      - name: Rename report for specific image tag
-        run: mv ${{ github.workspace }}/report.json ${{ github.workspace }}/${{ steps.tag.outputs.safe-tag }}.json
-      
-      - name: Upload image results JSON
-        uses: actions/upload-artifact@v2
-        with:
-          name: ${{ steps.tag.outputs.safe-tag }}-results
-          path: ${{ github.workspace }}/${{ steps.tag.outputs.safe-tag }}.json
+      #- name: Remove invalid characters from tag
+      #  run: |
+      #    safe=$(echo "${{ matrix.tags }}" | sed 's/:/-/g')
+      #    echo $safe
+      #    echo "::set-output name=safe-tag::$(echo $safe)"
+      #  id: tag
+#
+      #- name: Rename report for specific image tag
+      #  run: mv ${{ github.workspace }}/report.json ${{ github.workspace }}/${{ steps.tag.outputs.safe-tag }}.json
+      #
+      #- name: Upload image results JSON
+      #  uses: actions/upload-artifact@v2
+      #  with:
+      #    name: ${{ steps.tag.outputs.safe-tag }}-results
+      #    path: ${{ github.workspace }}/${{ steps.tag.outputs.safe-tag }}.json
+#
+      #- name: Determine status of scan.
+      #  if: ${{ steps.status.outputs.status }} == "fail" && ${{ github.event_name == 'pull_request' }}
+      #  run: |
+      #    echo "::set-output name=status::$(jq .status ${{ github.workspace }}/${{ steps.tag.outputs.safe-tag }}.json)"
+      #  id: status
+      #  
+      #- name: Fail job if scan is failed and is not pull request.
+      #  if: ${{ steps.status.outputs.status }} == "fail" && ${{ github.event_name != 'pull_request' }}
+      #  run: exit 1
 
-      - name: Determine status of scan.
-        if: ${{ steps.status.outputs.status }} == "fail" && ${{ github.event_name == 'pull_request' }}
-        run: |
-          echo "::set-output name=status::$(jq .status ${{ github.workspace }}/${{ steps.tag.outputs.safe-tag }}.json)"
-        id: status
-        
-      - name: Fail job if scan is failed and is not pull request.
-        if: ${{ steps.status.outputs.status }} == "fail" && ${{ github.event_name != 'pull_request' }}
-        run: exit 1
 
-
-  Post-Sysdig-Inline-Scan-Results:
-    runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'pull_request' }}
-    needs: 
-      - Build-Docker-Artifact
-      - Run-Sysdig-Inline-Scanner-v1
-    strategy:
-      matrix: ${{ fromJSON(needs.Build-Docker-Artifact.outputs.tags) }}
-    steps:
-      - name: Remove invalid characters from tag
-        run: |
-          safe=$(echo "${{ matrix.tags }}" | sed 's/:/-/g')
-          echo "::set-output name=safe-tag::$(echo $safe)"
-        id: tag
-
-      - name: Obtain comments URI
-        run: echo "::set-output name=comments-uri::$(jq .pull_request.'_links'.comments.href ${{ github.event_path }})"
-        id: comments-uri
-
-      - name: Download Artifact
-        uses: actions/download-artifact@v2
-        with:
-          name: ${{ steps.tag.outputs.safe-tag }}-results
-          path: ${{ github.workspace }}
-
-      - run: ls -lah ${{ github.workspace }}
-
-      - name: Parse Scan Results
-        run: |
-          results=$(jq .log ${{ github.workspace }}/${{ steps.tag.outputs.safe-tag }}.json)
-          echo "::set-output name=result::$(echo $results)"
-        id: results
-
-      - name: View context attributes
-        uses: actions/github-script@v5
-        with:
-          script: console.log(context)
-
-      - name: Post results to PR comments
-        uses: actions/github-script@v5
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          debug: true
-          script: |
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: ${{ steps.results.outputs.result }}
-            })
-
-      - name: Determine status of scan.
-        run: |
-          echo "::set-output name=status::$(jq .status ${{ github.workspace }}/${{ steps.tag.outputs.safe-tag }}.json)"
-        id: status
-        
-      - name: Fail job if scan is failed
-        if: ${{ steps.status.outputs.status }} == "fail"
-        run: exit 1
-        
+  #Post-Sysdig-Inline-Scan-Results:
+  #  runs-on: ubuntu-latest
+  #  if: ${{ github.event_name == 'pull_request' }}
+  #  needs: 
+  #    - Build-Docker-Artifact
+  #    - Run-Sysdig-Inline-Scanner-v1
+  #  strategy:
+  #    matrix: ${{ fromJSON(needs.Build-Docker-Artifact.outputs.tags) }}
+  #  steps:
+  #    - name: Remove invalid characters from tag
+  #      run: |
+  #        safe=$(echo "${{ matrix.tags }}" | sed 's/:/-/g')
+  #        echo "::set-output name=safe-tag::$(echo $safe)"
+  #      id: tag
+#
+  #    - name: Obtain comments URI
+  #      run: echo "::set-output name=comments-uri::$(jq .pull_request.'_links'.comments.href ${{ github.event_path }})"
+  #      id: comments-uri
+#
+  #    - name: Download Artifact
+  #      uses: actions/download-artifact@v2
+  #      with:
+  #        name: ${{ steps.tag.outputs.safe-tag }}-results
+  #        path: ${{ github.workspace }}
+#
+  #    - run: ls -lah ${{ github.workspace }}
+#
+  #    - name: Parse Scan Results
+  #      run: |
+  #        results=$(jq .log ${{ github.workspace }}/${{ steps.tag.outputs.safe-tag }}.json)
+  #        echo "::set-output name=result::$(echo $results)"
+  #      id: results
+#
+  #    - name: View context attributes
+  #      uses: actions/github-script@v5
+  #      with:
+  #        script: console.log(context)
+#
+  #    - name: Post results to PR comments
+  #      uses: actions/github-script@v5
+  #      with:
+  #        github-token: ${{ secrets.GITHUB_TOKEN }}
+  #        debug: true
+  #        script: |
+  #          github.rest.issues.createComment({
+  #            issue_number: context.issue.number,
+  #            owner: context.repo.owner,
+  #            repo: context.repo.repo,
+  #            body: ${{ steps.results.outputs.result }}
+  #          })
+#
+  #    - name: Determine status of scan.
+  #      run: |
+  #        echo "::set-output name=status::$(jq .status ${{ github.workspace }}/${{ steps.tag.outputs.safe-tag }}.json)"
+  #      id: status
+  #      
+  #    - name: Fail job if scan is failed
+  #      if: ${{ steps.status.outputs.status }} == "fail"
+  #      run: exit 1      
           
 
