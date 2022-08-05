@@ -1,157 +1,157 @@
-name: Build and Scan Image with Sysdig Secure Inline Scanner v1
-on: 
-  create:
-    tags:
-      - 'v*'
-  push:
-    tags:
-      - 'v*'
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
-    types:
-      - opened
-      - synchronize
-      - review_requested
-      - reopened
-      - edited
-
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}/sdc-ci-scan
-
-jobs:
-  Build-Docker-Artifact:
-    outputs:
-      tags: ${{ steps.save.outputs.json }}
-    runs-on: ubuntu-latest
-    steps:
-
-      - name: Checkout repository
-        uses: actions/checkout@v2
-      
-      - name: Define branch output
-        id: branch
-        run: echo "::set-output name=branch::$( echo ${{ github.ref }} | cut -d '/' -f 3 )"
-
-      - name: Log in to the Container registry
-        uses: docker/login-action@f054a8b539a109f9f41c372932f1ae047eff08c9
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Docker metadata tag set
-        id: meta
-        uses: docker/metadata-action@v3
-        with:
-          images: hello-world
-          registry: ${{ env.REGISTRY }}
-          tags: |
-            type=ref,event=branch,priority=300
-            type=raw,priority=100,enable=${{ github.event_name == 'pull_request' }},value=pr-${{ steps.branch.outputs.branch }}-{{sha}}
-            type=semver,pattern={{ version }},priority=900
-            type=semver,pattern={{major}}.{{minor}},priority=900
-            type=sha,prefix={{ branch }}-,priority=400,enable=${{ github.event_name == 'push' && steps.branch.outputs.branch == 'main' }}
-            type=ref,enable=${{ github.event_name == 'create' && startsWith(github.ref, 'refs/tags/v' ) }},event=tag,priority=100
-          labels: |
-            org.opencontainers.image.title=hello-world
-
-      - name: Set up Docker Buildx
-        if: ${{ !env.ACT }}
-        uses: docker/setup-buildx-action@v1
-
-      - name: Build hello-world image
-        if: ${{ !env.ACT }}
-        uses: docker/build-push-action@v2
-        id: build
-        with:
-          push: false
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=docker, dest=${{ github.workspace }}/hello-world.tar
-
-      - name: Upload Artifact
-        if: ${{ !env.ACT }}
-        uses: actions/upload-artifact@v2
-        with:
-          name: hello-world
-          path: ${{ github.workspace }}/hello-world.tar
-          retention-days: 5
-
-      - name: Store a matrix
-        id: save
-        uses: nickofthyme/object-remap@v1
-        with:
-          tags: '${{ toJSON(fromJSON(steps.meta.outputs.json).tags) }}'
-
-  Run-Sysdig-Inline-Scanner-v2:
-    runs-on: ubuntu-latest
-    needs:
-      - Build-Docker-Artifact
-    strategy:
-      matrix: ${{ fromJSON(needs.Build-Docker-Artifact.outputs.tags) }}
-    steps:
-      - name: Download Artifact
-        if: ${{ !env.ACT }}
-        uses: actions/download-artifact@v2
-        with: 
-          name: hello-world
-          path: ${{ github.workspace }}
-
-      #- name: Scan image with Sysdig Scanner v1
-      #  uses: sysdiglabs/scan-action@v3
-      #  id: scan
-      #  with:
-      #    image-tag: ${{ matrix.tags }}
-      #    sysdig-secure-url: ${{ secrets.SYSDIG_SECURE_URL }}
-      #    sysdig-secure-token: ${{ secrets.SECURE_API_TOKEN }}
-      #    input-type: docker-archive
-      #    input-path: ${{ github.workspace }}/hello-world.tar
-      #    ignore-failed-scan: true
-
-      - name: Scan image with Sysdig Scanner v2
-        run: |
-          docker load < hello-world.tar
-          export SECURE_API_TOKEN=${{ secrets.SECURE_API_TOKEN }}
-          VERSION=$(curl -L -s https://download.sysdig.com/scanning/sysdig-cli-scanner/latest_version.txt)
-          curl -LO "https://download.sysdig.com/scanning/bin/sysdig-cli-scanner/${VERSION}/linux/amd64/sysdig-cli-scanner"
-          chmod +x ./sysdig-cli-scanner
-          ./sysdig-cli-scanner --apiurl ${{ secrets.SYSDIG_SECURE_URL }} docker://${{ matrix.tags }}
-
-      #- name: Remove invalid characters from tag
-      #  run: |
-      #    safe=$(echo "${{ matrix.tags }}" | sed 's/:/-/g')
-      #    echo $safe
-      #    echo "::set-output name=safe-tag::$(echo $safe)"
-      #  id: tag
+#name: Build and Scan Image with Sysdig Secure Inline Scanner v1
+#on: 
+#  create:
+#    tags:
+#      - 'v*'
+#  push:
+#    tags:
+#      - 'v*'
+#    branches:
+#      - main
+#  pull_request:
+#    branches:
+#      - main
+#    types:
+#      - opened
+#      - synchronize
+#      - review_requested
+#      - reopened
+#      - edited
 #
-      #- name: Rename report for specific image tag
-      #  run: mv ${{ github.workspace }}/report.json ${{ github.workspace }}/${{ steps.tag.outputs.safe-tag }}.json
-      #
-      #- name: Upload image results JSON
-      #  uses: actions/upload-artifact@v2
-      #  with:
-      #    name: ${{ steps.tag.outputs.safe-tag }}-results
-      #    path: ${{ github.workspace }}/${{ steps.tag.outputs.safe-tag }}.json
+#env:
+#  REGISTRY: ghcr.io
+#  IMAGE_NAME: ${{ github.repository }}/hello-world
 #
-      #- name: Determine status of scan.
-      #  if: ${{ steps.status.outputs.status }} == "fail" && ${{ github.event_name == 'pull_request' }}
-      #  run: |
-      #    echo "::set-output name=status::$(jq .status ${{ github.workspace }}/${{ steps.tag.outputs.safe-tag }}.json)"
-      #  id: status
-      #  
-      #- name: Fail job if scan is failed and is not pull request.
-      #  if: ${{ steps.status.outputs.status }} == "fail" && ${{ github.event_name != 'pull_request' }}
-      #  run: exit 1
-
-
-  #Post-Sysdig-Inline-Scan-Results:
-  #  runs-on: ubuntu-latest
-  #  if: ${{ github.event_name == 'pull_request' }}
-  #  needs: 
+#jobs:
+#  Build-Docker-Artifact:
+#    outputs:
+#      tags: ${{ steps.save.outputs.json }}
+#    runs-on: ubuntu-latest
+#    steps:
+#
+#      - name: Checkout repository
+#        uses: actions/checkout@v2
+#      
+#      - name: Define branch output
+#        id: branch
+#        run: echo "::set-output name=branch::$( echo ${{ github.ref }} | cut -d '/' -f 3 )"
+#
+#      - name: Log in to the Container registry
+#        uses: docker/login-action@f054a8b539a109f9f41c372932f1ae047eff08c9
+#        with:
+#          registry: ${{ env.REGISTRY }}
+#          username: ${{ github.actor }}
+#          password: ${{ secrets.GITHUB_TOKEN }}
+#
+#      - name: Docker metadata tag set
+#        id: meta
+#        uses: docker/metadata-action@v3
+#        with:
+#          images: hello-world
+#          registry: ${{ env.REGISTRY }}
+#          tags: |
+#            type=ref,event=branch,priority=300
+#            type=raw,priority=100,enable=${{ github.event_name == 'pull_request' }},value=pr-${{ steps.branch.outputs.branch }}-{{sha}}
+#            type=semver,pattern={{ version }},priority=900
+#            type=semver,pattern={{major}}.{{minor}},priority=900
+#            type=sha,prefix={{ branch }}-,priority=400,enable=${{ github.event_name == 'push' && steps.branch.outputs.branch == 'main' }}
+#            type=ref,enable=${{ github.event_name == 'create' && startsWith(github.ref, 'refs/tags/v' ) }},event=tag,priority=100
+#          labels: |
+#            org.opencontainers.image.title=hello-world
+#
+#      - name: Set up Docker Buildx
+#        if: ${{ !env.ACT }}
+#        uses: docker/setup-buildx-action@v1
+#
+#      - name: Build hello-world image
+#        if: ${{ !env.ACT }}
+#        uses: docker/build-push-action@v2
+#        id: build
+#        with:
+#          push: false
+#          tags: ${{ steps.meta.outputs.tags }}
+#          labels: ${{ steps.meta.outputs.labels }}
+#          outputs: type=docker, dest=${{ github.workspace }}/hello-world.tar
+#
+#      - name: Upload Artifact
+#        if: ${{ !env.ACT }}
+#        uses: actions/upload-artifact@v2
+#        with:
+#          name: hello-world
+#          path: ${{ github.workspace }}/hello-world.tar
+#          retention-days: 5
+#
+#      - name: Store a matrix
+#        id: save
+#        uses: nickofthyme/object-remap@v1
+#        with:
+#          tags: '${{ toJSON(fromJSON(steps.meta.outputs.json).tags) }}'
+#
+#  Run-Sysdig-Inline-Scanner-v2:
+#    runs-on: ubuntu-latest
+#    needs:
+#      - Build-Docker-Artifact
+#    strategy:
+#      matrix: ${{ fromJSON(needs.Build-Docker-Artifact.outputs.tags) }}
+#    steps:
+#      - name: Download Artifact
+#        if: ${{ !env.ACT }}
+#        uses: actions/download-artifact@v2
+#        with: 
+#          name: hello-world
+#          path: ${{ github.workspace }}
+#
+#      #- name: Scan image with Sysdig Scanner v1
+#      #  uses: sysdiglabs/scan-action@v3
+#      #  id: scan
+#      #  with:
+#      #    image-tag: ${{ matrix.tags }}
+#      #    sysdig-secure-url: ${{ secrets.SYSDIG_SECURE_URL }}
+#      #    sysdig-secure-token: ${{ secrets.SECURE_API_TOKEN }}
+#      #    input-type: docker-archive
+#      #    input-path: ${{ github.workspace }}/hello-world.tar
+#      #    ignore-failed-scan: true
+#
+#      - name: Scan image with Sysdig Scanner v2
+#        run: |
+#          docker load < hello-world.tar
+#          export SECURE_API_TOKEN=${{ secrets.SECURE_API_TOKEN }}
+#          VERSION=$(curl -L -s https://download.sysdig.com/scanning/sysdig-cli-scanner/latest_version.txt)
+#          curl -LO "https://download.sysdig.com/scanning/bin/sysdig-cli-scanner/${VERSION}/linux/amd64/sysdig-cli-scanner"
+#          chmod +x ./sysdig-cli-scanner
+#          ./sysdig-cli-scanner --apiurl ${{ secrets.SYSDIG_SECURE_URL }} docker://${{ matrix.tags }}
+#
+#      #- name: Remove invalid characters from tag
+#      #  run: |
+#      #    safe=$(echo "${{ matrix.tags }}" | sed 's/:/-/g')
+#      #    echo $safe
+#      #    echo "::set-output name=safe-tag::$(echo $safe)"
+#      #  id: tag
+##
+#      #- name: Rename report for specific image tag
+#      #  run: mv ${{ github.workspace }}/report.json ${{ github.workspace }}/${{ steps.tag.outputs.safe-tag }}.json
+#      #
+#      #- name: Upload image results JSON
+#      #  uses: actions/upload-artifact@v2
+#      #  with:
+#      #    name: ${{ steps.tag.outputs.safe-tag }}-results
+#      #    path: ${{ github.workspace }}/${{ steps.tag.outputs.safe-tag }}.json
+##
+#      #- name: Determine status of scan.
+#      #  if: ${{ steps.status.outputs.status }} == "fail" && ${{ github.event_name == 'pull_request' }}
+#      #  run: |
+#      #    echo "::set-output name=status::$(jq .status ${{ github.workspace }}/${{ steps.tag.outputs.safe-tag }}.json)"
+#      #  id: status
+#      #  
+#      #- name: Fail job if scan is failed and is not pull request.
+#      #  if: ${{ steps.status.outputs.status }} == "fail" && ${{ github.event_name != 'pull_request' }}
+#      #  run: exit 1
+#
+#
+#  #Post-Sysdig-Inline-Scan-Results:
+#  #  runs-on: ubuntu-latest
+#  #  if: ${{ github.event_name == 'pull_request' }}
+#  #  needs: 
   #    - Build-Docker-Artifact
   #    - Run-Sysdig-Inline-Scanner-v1
   #  strategy:

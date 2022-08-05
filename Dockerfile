@@ -1,2 +1,2 @@
-FROM httpd:latest
-COPY ./web /usr/local/apache2/htdocs/ 
+FROM httpd:alpine
+ADD ./web /usr/local/apache2/htdocs/ 
