@@ -9,7 +9,7 @@ pipeline {
         }
         stage('Scan image') {
             steps {
-                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
+                catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
                     withCredentials([usernamePassword(credentialsId: 'sysdig-secure-api-credentials', passwordVariable: 'SECURE_API_TOKEN', usernameVariable: '')]) {
                         sh '''
                             VERSION=$(curl -L -s https://download.sysdig.com/scanning/sysdig-cli-scanner/latest_version.txt)
@@ -23,7 +23,7 @@ pipeline {
         }
         stage('Scanning Image with Plugin') {
             steps {
-                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
+                catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
                     sysdigImageScan engineCredentialsId: 'sysdig-secure-api-credentials', imageName: "quay.io/sysdig/agent-slim:12.8.1"
                 }
             }
